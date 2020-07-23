@@ -16,4 +16,5 @@ WaterSim is a physics engine aims to simulate water developed in taichi.
 + PIC
 + Affine PIC
 + Poly PIC
++ FLIP
 + MPM
