@@ -28,36 +28,36 @@ screen_res = (400, 400 * n // m)
 bwrR = ColorMap(1.0, .25, 1, .5)
 bwrG = ColorMap(1.0, .5, .5, .5)
 bwrB = ColorMap(1.0, 1, .25, .5)
-color_buffer = ti.Vector(3, dt=ti.f32, shape=screen_res)
+color_buffer = ti.Vector.field(3, dtype=ti.f32, shape=screen_res)
 gui = ti.GUI("watersim2D", screen_res)
 
 # cell type
-cell_type = ti.var(dt=ti.i32, shape=(m, n))
+cell_type = ti.field(dtype=ti.i32, shape=(m, n))
 
 # velocity field
-u = ti.var(dt=ti.f32, shape=(m + 1, n))
-v = ti.var(dt=ti.f32, shape=(m, n + 1))
-u_temp = ti.var(dt=ti.f32, shape=(m + 1, n))
-v_temp = ti.var(dt=ti.f32, shape=(m, n + 1))
+u = ti.field(dtype=ti.f32, shape=(m + 1, n))
+v = ti.field(dtype=ti.f32, shape=(m, n + 1))
+u_temp = ti.field(dtype=ti.f32, shape=(m + 1, n))
+v_temp = ti.field(dtype=ti.f32, shape=(m, n + 1))
 
 # pressure field
-p = ti.var(dt=ti.f32, shape=(m, n))
+p = ti.field(dtype=ti.f32, shape=(m, n))
 
 #pressure solver
 solver = CGSolver(m, n, u, v, cell_type)
 
 # particle x and v
-particle_positions = ti.Vector(2, dt=ti.f32, shape=(m, n, npar, npar))
-particle_velocities = ti.Vector(2, dt=ti.f32, shape=(m, n, npar, npar))
+particle_positions = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
+particle_velocities = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
 
 # particle type
-particle_type = ti.var(dt=ti.f32, shape=(m, n, npar, npar))
+particle_type = ti.field(dtype=ti.f32, shape=(m, n, npar, npar))
 P_FLUID = 1
 P_OTHER = 0
 
 # extrap utils
-valid = ti.var(dt=ti.i32, shape=(m + 1, n + 1))
-valid_temp = ti.var(dt=ti.i32, shape=(m + 1, n + 1))
+valid = ti.field(dtype=ti.i32, shape=(m + 1, n + 1))
+valid_temp = ti.field(dtype=ti.i32, shape=(m + 1, n + 1))
 
 # save to gif
 result_dir = "./results"
