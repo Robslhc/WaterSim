@@ -12,21 +12,21 @@ class CGSolver:
         self.cell_type = cell_type
 
         # rhs of linear system
-        self.b = ti.field(dtype=ti.f32, shape=(self.m, self.n))
+        self.b = ti.var(dt=ti.f32, shape=(self.m, self.n))
 
         # lhs of linear system
-        self.Adiag = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.Ax = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.Ay = ti.field(dtype=ti.f32, shape=(self.m, self.n))
+        self.Adiag = ti.var(dt=ti.f32, shape=(self.m, self.n))
+        self.Ax = ti.var(dt=ti.f32, shape=(self.m, self.n))
+        self.Ay = ti.var(dt=ti.f32, shape=(self.m, self.n))
 
         # cg var
-        self.p = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.r = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.s = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.As = ti.field(dtype=ti.f32, shape=(self.m, self.n))
-        self.sum = ti.field(dtype=ti.f32, shape=())
-        self.alpha = ti.field(dtype=ti.f32, shape=())
-        self.beta = ti.field(dtype=ti.f32, shape=())
+        self.p = ti.var(dt=ti.f32, shape=(self.m, self.n))
+        self.r = ti.var(dt=ti.f32, shape=(self.m, self.n))
+        self.s = ti.var(dt=ti.f32, shape=(self.m, self.n))
+        self.As = ti.var(dt=ti.f32, shape=(self.m, self.n))
+        self.sum = ti.var(dt=ti.f32, shape=())
+        self.alpha = ti.var(dt=ti.f32, shape=())
+        self.beta = ti.var(dt=ti.f32, shape=())
 
     @ti.kernel
     def system_init_kernel(self, scale_A: ti.f32, scale_b: ti.f32):
