@@ -48,9 +48,7 @@ solver = CGSolver(m, n, u, v, cell_type)
 
 # particle x and v
 particle_positions = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
-particle_velocities = ti.Vector.field(2,
-                                      dtype=ti.f32,
-                                      shape=(m, n, npar, npar))
+particle_velocities = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
 
 # particle type
 particle_type = ti.field(dtype=ti.f32, shape=(m, n, npar, npar))
