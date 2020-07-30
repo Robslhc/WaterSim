@@ -1,5 +1,6 @@
 import taichi as ti
 from CGSolver import CGSolver
+from MICPCGSolver import MICPCGSolver
 import numpy as np
 from utils import ColorMap, vec2, vec3, clamp
 import utils
@@ -44,7 +45,13 @@ v_temp = ti.field(dtype=ti.f32, shape=(m, n + 1))
 p = ti.field(dtype=ti.f32, shape=(m, n))
 
 #pressure solver
-solver = CGSolver(m, n, u, v, cell_type)
+preconditioning = 'MIC'
+MIC_blending = 0.97
+
+if preconditioning == None:
+    solver = CGSolver(m, n, u, v, cell_type)
+elif preconditioning == 'MIC':
+    solver = MICPCGSolver(m, n, u, v, cell_type, MIC_blending=MIC_blending)
 
 # particle x and v
 particle_positions = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
