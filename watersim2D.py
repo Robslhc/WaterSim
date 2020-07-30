@@ -5,6 +5,7 @@ import numpy as np
 from utils import ColorMap, vec2, vec3, clamp
 import utils
 import random
+import time
 
 ti.init(arch=ti.cpu, default_fp=ti.f32)
 
@@ -411,7 +412,11 @@ def simulation(max_time, max_step):
 
 def main():
     init()
+    t0 = time.time()
     simulation(20, 480)
+    t1 = time.time()
+    print("simulation elapsed time = {} seconds".format(t1 - t0))
+
     video_manager.make_video(gif=False, mp4=True)
 
 
