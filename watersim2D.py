@@ -8,7 +8,7 @@ import utils
 import random
 import time
 
-ti.init(arch=ti.cpu, default_fp=ti.f32)
+ti.init(arch=ti.gpu, default_fp=ti.f32)
 
 # params in simulation
 cell_res = 256
@@ -25,6 +25,12 @@ pspace_y = grid_y / npar
 
 rho = 1000
 g = -9.8
+substeps = 4
+
+# algorithm = 'FLIP/PIC'
+# algorithm = 'Euler'
+algorithm = 'APIC'
+FLIP_blending = 0.0
 
 # params in render
 screen_res = (400, 400 * n // m)
@@ -42,6 +48,10 @@ u = ti.field(dtype=ti.f32, shape=(m + 1, n))
 v = ti.field(dtype=ti.f32, shape=(m, n + 1))
 u_temp = ti.field(dtype=ti.f32, shape=(m + 1, n))
 v_temp = ti.field(dtype=ti.f32, shape=(m, n + 1))
+u_last = ti.field(dtype=ti.f32, shape=(m + 1, n))
+v_last = ti.field(dtype=ti.f32, shape=(m, n + 1))
+u_weight = ti.field(dtype=ti.f32, shape=(m + 1, n))
+v_weight = ti.field(dtype=ti.f32, shape=(m, n + 1))
 
 # pressure field
 p = ti.field(dtype=ti.f32, shape=(m, n))
@@ -74,6 +84,9 @@ particle_positions = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
 particle_velocities = ti.Vector.field(2,
                                       dtype=ti.f32,
                                       shape=(m, n, npar, npar))
+# particle C
+cp_x = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
+cp_y = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
 
 # particle type
 particle_type = ti.field(dtype=ti.f32, shape=(m, n, npar, npar))
@@ -136,9 +149,11 @@ def init():
     def init_field():
         for i, j in u:
             u[i, j] = 0.0
+            u_last[i, j] = 0.0
 
         for i, j in v:
             v[i, j] = 0.0
+            v_last[i, j] = 0.0
 
         for i, j in p:
             p[i, j] = 0.0
@@ -156,6 +171,8 @@ def init():
 
             particle_positions[i, j, ix, jx] = vec2(px, py)
             particle_velocities[i, j, ix, jx] = vec2(0.0, 0.0)
+            cp_x[i, j, ix, jx] = vec2(0.0, 0.0)
+            cp_y[i, j, ix, jx] = vec2(0.0, 0.0)
 
     init_dambreak(4, 4)
     init_field()
@@ -310,11 +327,12 @@ def apply_pressure(dt: ti.f32):
 
 
 @ti.kernel
-def update_particle(dt: ti.f32):
-    for i, j, ix, jx in particle_velocities:
-        if particle_type[i, j, ix, jx] == P_FLUID:
-            pos = particle_positions[i, j, ix, jx]
-            pv = sample_velocity(pos, u, v)
+def advect_particles(dt: ti.f32):
+    for p in ti.grouped(particle_positions):
+        if particle_type[p] == P_FLUID:
+            pos = particle_positions[p]
+            pv = particle_velocities[p]
+
             pos += pv * dt
 
             if pos[0] < grid_x:  # left boundary
@@ -330,8 +348,8 @@ def update_particle(dt: ti.f32):
                 pos[1] = h - grid_y
                 pv[1] = 0
 
-            particle_velocities[i, j, ix, jx] = pv
-            particle_positions[i, j, ix, jx] = pos
+            particle_positions[p] = pos
+            particle_velocities[p] = pv
 
 
 @ti.kernel
@@ -379,6 +397,159 @@ def advection(dt):
     v.copy_from(v_temp)
 
 
+@ti.func
+def Bspline(x):
+    r = abs(x)
+    res = 0.0
+
+    if 0.0 <= r < 0.5:
+        res = 0.75 - r**2
+    elif 0.5 <= r < 1.5:
+        res = 0.5 * (1.5 - r)**2
+
+    return res
+
+
+@ti.func
+def Bspline_grad(x):
+    r = abs(x)
+    res = 0.0
+
+    if 0.0 <= r < 0.5:
+        res = -2 * x
+    elif 0.5 <= x < 1.5:
+        res = x - 1.5
+    elif -1.5 < x <= -0.5:
+        res = x + 1.5
+
+    return res
+
+
+@ti.func
+def gather_vp(grid_v, grid_vlast, xp, stagger):
+    inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
+    base, _ = pos_to_stagger_idx(xp, stagger)
+
+    v_pic = 0.0
+    v_flip = 0.0
+
+    for i in ti.static(range(-1, 3)):
+        for j in ti.static(range(-1, 3)):
+            I = vec2(i, j)
+            pos = base + I + stagger
+            fx = xp * inv_dx - pos
+            weight = Bspline(fx[0]) * Bspline(fx[1])
+            v_pic += weight * grid_v[base + I]
+            v_flip += weight * (grid_v[base + I] - grid_vlast[base + I])
+
+    return v_pic, v_flip
+
+
+@ti.func
+def gather_cp(grid_v, xp, stagger):
+    inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
+    base, _ = pos_to_stagger_idx(xp, stagger)
+
+    cp = vec2(0.0, 0.0)
+
+    for i in ti.static(range(-1, 3)):
+        for j in ti.static(range(-1, 3)):
+            I = vec2(i, j)
+            pos = base + I + stagger
+            fx = xp * inv_dx - pos
+            gradweight = vec2(
+                Bspline_grad(fx[0]) * Bspline(fx[1]),
+                Bspline(fx[0]) * Bspline_grad(fx[1]))
+            cp += gradweight * grid_v[base + I]
+
+    return cp
+
+
+@ti.kernel
+def G2P():
+    stagger_u = vec2(0.0, 0.5)
+    stagger_v = vec2(0.5, 0.0)
+    for p in ti.grouped(particle_positions):
+        if particle_type[p] == P_FLUID:
+            # update velocity
+            xp = particle_positions[p]
+            u_pic, u_flip = gather_vp(u, u_last, xp, stagger_u)
+            v_pic, v_flip = gather_vp(v, v_last, xp, stagger_v)
+
+            new_v_pic = vec2(u_pic, v_pic)
+
+            if ti.static(algorithm == 'FLIP/PIC'):
+                new_v_flip = particle_velocities[p] + vec2(u_flip, v_flip)
+
+                particle_velocities[p] = FLIP_blending * new_v_flip + (
+                    1 - FLIP_blending) * new_v_pic
+            elif ti.static(algorithm == 'APIC'):
+                particle_velocities[p] = new_v_pic
+                cp_x[p] = gather_cp(u, xp, stagger_u)
+                cp_y[p] = gather_cp(v, xp, stagger_v)
+
+
+@ti.func
+def scatter_vp(grid_v, grid_m, xp, vp, stagger):
+    inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
+    base, _ = pos_to_stagger_idx(xp, stagger)
+
+    for i in ti.static(range(-1, 3)):
+        for j in ti.static(range(-1, 3)):
+            I = vec2(i, j)
+            pos = base + I + stagger
+            fx = xp * inv_dx - pos
+            weight = Bspline(fx[0]) * Bspline(fx[1])
+            grid_v[base + I] += weight * vp
+            grid_m[base + I] += weight
+
+
+@ti.func
+def scatter_vp_apic(grid_v, grid_m, xp, vp, cp, stagger):
+    inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
+    base, _ = pos_to_stagger_idx(xp, stagger)
+
+    for i in ti.static(range(-1, 3)):
+        for j in ti.static(range(-1, 3)):
+            I = vec2(i, j)
+            pos = base + I + stagger
+            fx = xp * inv_dx - pos
+            weight = Bspline(fx[0]) * Bspline(fx[1])
+            grid_v[base + I] += weight * (vp + cp.dot(fx))
+            grid_m[base + I] += weight
+
+
+@ti.kernel
+def P2G():
+    stagger_u = vec2(0.0, 0.5)
+    stagger_v = vec2(0.5, 0.0)
+    for p in ti.grouped(particle_positions):
+        if particle_type[p] == P_FLUID:
+            xp = particle_positions[p]
+
+            if ti.static(algorithm == 'FLIP/PIC'):
+                scatter_vp(u, u_weight, xp, particle_velocities[p][0],
+                           stagger_u)
+                scatter_vp(v, v_weight, xp, particle_velocities[p][1],
+                           stagger_v)
+            elif ti.static(algorithm == 'APIC'):
+                scatter_vp_apic(u, u_weight, xp, particle_velocities[p][0],
+                                cp_x[p], stagger_u)
+                scatter_vp_apic(v, v_weight, xp, particle_velocities[p][1],
+                                cp_y[p], stagger_v)
+
+
+@ti.kernel
+def grid_norm():
+    for i, j in u:
+        if u_weight[i, j] > 0:
+            u[i, j] = u[i, j] / u_weight[i, j]
+
+    for i, j in v:
+        if v_weight[i, j] > 0:
+            v[i, j] = v[i, j] / v_weight[i, j]
+
+
 def onestep(dt):
     apply_gravity(dt)
     enforce_boundary()
@@ -393,42 +564,59 @@ def onestep(dt):
     extrapolate_velocity()
     enforce_boundary()
 
-    update_particle(dt)
-    mark_cell()
+    if algorithm == 'FLIP/PIC' or algorithm == 'APIC':
+        G2P()
+        advect_particles(dt)
+        mark_cell()
 
-    advection(dt)
-    enforce_boundary()
+        u.fill(0.0)
+        v.fill(0.0)
+        u_weight.fill(0.0)
+        v_weight.fill(0.0)
+
+        P2G()
+        grid_norm()
+        enforce_boundary()
+
+        u_last.copy_from(u)
+        v_last.copy_from(v)
+
+    else:
+        advect_particles(dt)
+        mark_cell()
+
+        advection(dt)
+        enforce_boundary()
 
 
 def simulation(max_time, max_step):
-    dt = 0.025
+    dt = 0.01
     t = 0
     step = 1
 
-    render()
-
     while step < max_step and t < max_time:
-        onestep(dt)
-
         render()
 
-        pv = particle_velocities.to_numpy()
-        max_vel = np.max(np.linalg.norm(pv, 2, axis=1))
+        for i in range(substeps):
+            onestep(dt)
 
-        print("step = {}, time = {}, dt = {}, maxv = {}".format(
-            step, t, dt, max_vel))
+            pv = particle_velocities.to_numpy()
+            max_vel = np.max(np.linalg.norm(pv, 2, axis=1))
 
-        t += dt
+            print("step = {}, substeps = {}, time = {}, dt = {}, maxv = {}".
+                  format(step, i, t, dt, max_vel))
+
+            t += dt
+            # update dt with CFL
+            # dt = 5 * grid_x / max_vel
+
         step += 1
-
-        # update dt with CFL
-        # dt = 0.8 * grid_x / max_vel
 
 
 def main():
     init()
     t0 = time.time()
-    simulation(20, 480)
+    simulation(40, 240)
     t1 = time.time()
     print("simulation elapsed time = {} seconds".format(t1 - t0))
 
