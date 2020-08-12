@@ -27,8 +27,9 @@ rho = 1000
 g = -9.8
 substeps = 4
 
-algorithm = 'FLIP/PIC'
+# algorithm = 'FLIP/PIC'
 # algorithm = 'Euler'
+algorithm = 'APIC'
 FLIP_blending = 0.0
 
 # params in render
@@ -83,6 +84,9 @@ particle_positions = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
 particle_velocities = ti.Vector.field(2,
                                       dtype=ti.f32,
                                       shape=(m, n, npar, npar))
+# particle C
+cp_x = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
+cp_y = ti.Vector.field(2, dtype=ti.f32, shape=(m, n, npar, npar))
 
 # particle type
 particle_type = ti.field(dtype=ti.f32, shape=(m, n, npar, npar))
@@ -167,6 +171,8 @@ def init():
 
             particle_positions[i, j, ix, jx] = vec2(px, py)
             particle_velocities[i, j, ix, jx] = vec2(0.0, 0.0)
+            cp_x[i, j, ix, jx] = vec2(0.0, 0.0)
+            cp_y[i, j, ix, jx] = vec2(0.0, 0.0)
 
     init_dambreak(4, 4)
     init_field()
@@ -405,6 +411,21 @@ def Bspline(x):
 
 
 @ti.func
+def Bspline_grad(x):
+    r = abs(x)
+    res = 0.0
+
+    if 0.0 <= r < 0.5:
+        res = -2 * x
+    elif 0.5 <= x < 1.5:
+        res = x - 1.5
+    elif -1.5 < x <= -0.5:
+        res = x + 1.5
+
+    return res
+
+
+@ti.func
 def gather_vp(grid_v, grid_vlast, xp, stagger):
     inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
     base, _ = pos_to_stagger_idx(xp, stagger)
@@ -424,6 +445,26 @@ def gather_vp(grid_v, grid_vlast, xp, stagger):
     return v_pic, v_flip
 
 
+@ti.func
+def gather_cp(grid_v, xp, stagger):
+    inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
+    base, _ = pos_to_stagger_idx(xp, stagger)
+
+    cp = vec2(0.0, 0.0)
+
+    for i in ti.static(range(-1, 3)):
+        for j in ti.static(range(-1, 3)):
+            I = vec2(i, j)
+            pos = base + I + stagger
+            fx = xp * inv_dx - pos
+            gradweight = vec2(
+                Bspline_grad(fx[0]) * Bspline(fx[1]),
+                Bspline(fx[0]) * Bspline_grad(fx[1]))
+            cp += gradweight * grid_v[base + I]
+
+    return cp
+
+
 @ti.kernel
 def G2P():
     stagger_u = vec2(0.0, 0.5)
@@ -436,10 +477,16 @@ def G2P():
             v_pic, v_flip = gather_vp(v, v_last, xp, stagger_v)
 
             new_v_pic = vec2(u_pic, v_pic)
-            new_v_flip = particle_velocities[p] + vec2(u_flip, v_flip)
 
-            particle_velocities[p] = FLIP_blending * new_v_flip + (
-                1 - FLIP_blending) * new_v_pic
+            if ti.static(algorithm == 'FLIP/PIC'):
+                new_v_flip = particle_velocities[p] + vec2(u_flip, v_flip)
+
+                particle_velocities[p] = FLIP_blending * new_v_flip + (
+                    1 - FLIP_blending) * new_v_pic
+            elif ti.static(algorithm == 'APIC'):
+                particle_velocities[p] = new_v_pic
+                cp_x[p] = gather_cp(u, xp, stagger_u)
+                cp_y[p] = gather_cp(v, xp, stagger_v)
 
 
 @ti.func
@@ -457,6 +504,21 @@ def scatter_vp(grid_v, grid_m, xp, vp, stagger):
             grid_m[base + I] += weight
 
 
+@ti.func
+def scatter_vp_apic(grid_v, grid_m, xp, vp, cp, stagger):
+    inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
+    base, _ = pos_to_stagger_idx(xp, stagger)
+
+    for i in ti.static(range(-1, 3)):
+        for j in ti.static(range(-1, 3)):
+            I = vec2(i, j)
+            pos = base + I + stagger
+            fx = xp * inv_dx - pos
+            weight = Bspline(fx[0]) * Bspline(fx[1])
+            grid_v[base + I] += weight * (vp + cp.dot(fx))
+            grid_m[base + I] += weight
+
+
 @ti.kernel
 def P2G():
     stagger_u = vec2(0.0, 0.5)
@@ -465,8 +527,16 @@ def P2G():
         if particle_type[p] == P_FLUID:
             xp = particle_positions[p]
 
-            scatter_vp(u, u_weight, xp, particle_velocities[p][0], stagger_u)
-            scatter_vp(v, v_weight, xp, particle_velocities[p][1], stagger_v)
+            if ti.static(algorithm == 'FLIP/PIC'):
+                scatter_vp(u, u_weight, xp, particle_velocities[p][0],
+                           stagger_u)
+                scatter_vp(v, v_weight, xp, particle_velocities[p][1],
+                           stagger_v)
+            elif ti.static(algorithm == 'APIC'):
+                scatter_vp_apic(u, u_weight, xp, particle_velocities[p][0],
+                                cp_x[p], stagger_u)
+                scatter_vp_apic(v, v_weight, xp, particle_velocities[p][1],
+                                cp_y[p], stagger_v)
 
 
 @ti.kernel
@@ -494,7 +564,7 @@ def onestep(dt):
     extrapolate_velocity()
     enforce_boundary()
 
-    if algorithm == 'FLIP/PIC':
+    if algorithm == 'FLIP/PIC' or algorithm == 'APIC':
         G2P()
         advect_particles(dt)
         mark_cell()
