@@ -327,6 +327,14 @@ def apply_pressure(dt: ti.f32):
 
 
 @ti.kernel
+def update_particle_velocities(dt: ti.f32):
+    for p in ti.grouped(particle_positions):
+        if particle_type[p] == P_FLUID:
+            pv = sample_velocity(particle_positions[p], u, v)
+            particle_velocities[p] = pv
+
+
+@ti.kernel
 def advect_particles(dt: ti.f32):
     for p in ti.grouped(particle_positions):
         if particle_type[p] == P_FLUID:
@@ -335,21 +343,7 @@ def advect_particles(dt: ti.f32):
 
             pos += pv * dt
 
-            if pos[0] < grid_x:  # left boundary
-                pos[0] = grid_x
-                pv[0] = 0
-            if pos[0] > w - grid_x:  # right boundary
-                pos[0] = w - grid_x
-                pv[0] = 0
-            if pos[1] < grid_y:  # bottom boundary
-                pos[1] = grid_y
-                pv[1] = 0
-            if pos[1] > h - grid_y:  # top boundary
-                pos[1] = h - grid_y
-                pv[1] = 0
-
             particle_positions[p] = pos
-            particle_velocities[p] = pv
 
 
 @ti.kernel
@@ -582,6 +576,7 @@ def onestep(dt):
         v_last.copy_from(v)
 
     else:
+        update_particle_velocities(dt)
         advect_particles(dt)
         mark_cell()
 
