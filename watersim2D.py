@@ -39,6 +39,7 @@ bwrG = ColorMap(1.0, .5, .5, .5)
 bwrB = ColorMap(1.0, 1, .25, .5)
 color_buffer = ti.Vector.field(3, dtype=ti.f32, shape=screen_res)
 gui = ti.GUI("watersim2D", screen_res)
+series_prefix = "results/ply/watersim2D.ply"
 
 # cell type
 cell_type = ti.field(dtype=ti.i32, shape=(m, n))
@@ -126,6 +127,23 @@ def render():
 
     # save video
     video_manager.write_frame(img)
+
+
+def export_ply(frame):
+    pf = particle_type.to_numpy()
+    np_type = pf.copy()
+    np_type = np.reshape(np_type, -1)
+
+    pos = particle_positions.to_numpy()
+    np_pos = pos.copy()
+    np_pos = np.reshape(pos, (-1, 2))
+    np_pos = np_pos[np.where(np_type == P_FLUID)]
+
+    n_particles = np_pos.shape[0]
+    writer = ti.PLYWriter(num_vertices=n_particles)
+    writer.add_vertex_pos(np_pos[:, 0], np_pos[:, 1], np.zeros(n_particles))
+
+    writer.export_frame_ascii(frame, series_prefix)
 
 
 def init():
@@ -591,6 +609,7 @@ def simulation(max_time, max_step):
 
     while step < max_step and t < max_time:
         render()
+        export_ply(step)
 
         for i in range(substeps):
             onestep(dt)
