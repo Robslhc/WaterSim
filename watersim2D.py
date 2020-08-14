@@ -33,7 +33,7 @@ algorithm = 'APIC'
 FLIP_blending = 0.0
 
 # params in render
-screen_res = (400, 400 * n // m)
+screen_res = (800, 800 * n // m)
 bwrR = ColorMap(1.0, .25, 1, .5)
 bwrG = ColorMap(1.0, .5, .5, .5)
 bwrB = ColorMap(1.0, 1, .25, .5)
@@ -129,7 +129,7 @@ def render():
     def render_particles():
         bg_color = 0x112f41
         particle_color = 0x068587
-        particle_radius = 0.5
+        particle_radius = 1.0
 
         pf = particle_type.to_numpy()
         np_type = pf.copy()
@@ -373,7 +373,21 @@ def advect_particles(dt: ti.f32):
 
             pos += pv * dt
 
+            if pos[0] < grid_x:  # left boundary
+                pos[0] = grid_x
+                pv[0] = 0
+            if pos[0] > w - grid_x:  # right boundary
+                pos[0] = w - grid_x
+                pv[0] = 0
+            if pos[1] < grid_y:  # bottom boundary
+                pos[1] = grid_y
+                pv[1] = 0
+            if pos[1] > h - grid_y:  # top boundary
+                pos[1] = h - grid_y
+                pv[1] = 0
+
             particle_positions[p] = pos
+            particle_velocities[p] = pv
 
 
 @ti.kernel
@@ -641,7 +655,7 @@ def simulation(max_time, max_step):
 def main():
     init()
     t0 = time.time()
-    simulation(40, 240)
+    simulation(40, 120)
     t1 = time.time()
     print("simulation elapsed time = {} seconds".format(t1 - t0))
 
