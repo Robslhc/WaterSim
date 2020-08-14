@@ -105,6 +105,8 @@ video_manager = ti.VideoManager(output_dir=result_dir,
 
 
 def render():
+    render_type = 'particles'
+
     @ti.func
     def map_color(c):
         return vec3(bwrR.map(c), bwrG.map(c), bwrB.map(c))
@@ -119,14 +121,42 @@ def render():
 
             color_buffer[i, j] = map_color(m * 0.5)
 
-    fill_marker()
-    img = color_buffer.to_numpy()
-    gui.set_image(img)
-    # gui.show()
+    def render_pixels():
+        fill_marker()
+        img = color_buffer.to_numpy()
+        gui.set_image(img) 
 
-    # save video
-    video_manager.write_frame(img)
+    def render_particles():
+        bg_color = 0x112f41
+        particle_color = 0x068587
+        particle_radius = 3.0
 
+        pf = particle_type.to_numpy()
+        np_type = pf.copy()
+        np_type = np.reshape(np_type, -1)
+
+        pos = particle_positions.to_numpy()
+        np_pos = pos.copy()
+        np_pos = np.reshape(pos, (-1, 2))
+        np_pos = np_pos[np.where(np_type == P_FLUID)]
+
+        # for pos in pos_np:
+        #     pos[0] = pos[0] / w * screen_res[0]
+        #     pos[1] = pos[1] / h * screen_res[1]
+
+        for i in range(np_pos.shape[0]):
+            np_pos[i][0] /= w
+            np_pos[i][1] /= h
+
+        gui.clear(bg_color)
+        gui.circles(np_pos, radius=particle_radius, color=particle_color)
+    
+    if render_type == 'particles':
+        render_particles()
+    else:
+        render_pixels()
+
+    video_manager.write_frame(gui.get_image())
 
 def init():
     # init scene
@@ -615,7 +645,7 @@ def main():
     t1 = time.time()
     print("simulation elapsed time = {} seconds".format(t1 - t0))
 
-    video_manager.make_video(gif=False, mp4=True)
+    video_manager.make_video(gif=True, mp4=True)
 
 
 if __name__ == "__main__":
