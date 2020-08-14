@@ -129,7 +129,7 @@ def render():
     def render_particles():
         bg_color = 0x112f41
         particle_color = 0x068587
-        particle_radius = 3.0
+        particle_radius = 0.5
 
         pf = particle_type.to_numpy()
         np_type = pf.copy()
