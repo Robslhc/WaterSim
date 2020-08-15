@@ -140,10 +140,6 @@ def render():
         np_pos = np.reshape(pos, (-1, 2))
         np_pos = np_pos[np.where(np_type == P_FLUID)]
 
-        # for pos in pos_np:
-        #     pos[0] = pos[0] / w * screen_res[0]
-        #     pos[1] = pos[1] / h * screen_res[1]
-
         for i in range(np_pos.shape[0]):
             np_pos[i][0] /= w
             np_pos[i][1] /= h
@@ -204,7 +200,7 @@ def init():
             cp_x[i, j, ix, jx] = vec2(0.0, 0.0)
             cp_y[i, j, ix, jx] = vec2(0.0, 0.0)
 
-    init_dambreak(4, 4)
+    init_dambreak(4, 5)
     init_field()
     init_particles()
 
@@ -373,16 +369,16 @@ def advect_particles(dt: ti.f32):
 
             pos += pv * dt
 
-            if pos[0] < grid_x:  # left boundary
+            if pos[0] <= grid_x:  # left boundary
                 pos[0] = grid_x
                 pv[0] = 0
-            if pos[0] > w - grid_x:  # right boundary
+            if pos[0] >= w - grid_x:  # right boundary
                 pos[0] = w - grid_x
                 pv[0] = 0
-            if pos[1] < grid_y:  # bottom boundary
+            if pos[1] <= grid_y:  # bottom boundary
                 pos[1] = grid_y
                 pv[1] = 0
-            if pos[1] > h - grid_y:  # top boundary
+            if pos[1] >= h - grid_y:  # top boundary
                 pos[1] = h - grid_y
                 pv[1] = 0
 
@@ -434,51 +430,23 @@ def advection(dt):
     u.copy_from(u_temp)
     v.copy_from(v_temp)
 
-
-@ti.func
-def Bspline(x):
-    r = abs(x)
-    res = 0.0
-
-    if 0.0 <= r < 0.5:
-        res = 0.75 - r**2
-    elif 0.5 <= r < 1.5:
-        res = 0.5 * (1.5 - r)**2
-
-    return res
-
-
-@ti.func
-def Bspline_grad(x):
-    r = abs(x)
-    res = 0.0
-
-    if 0.0 <= r < 0.5:
-        res = -2 * x
-    elif 0.5 <= x < 1.5:
-        res = x - 1.5
-    elif -1.5 < x <= -0.5:
-        res = x + 1.5
-
-    return res
-
-
 @ti.func
 def gather_vp(grid_v, grid_vlast, xp, stagger):
     inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
-    base, _ = pos_to_stagger_idx(xp, stagger)
+    base = (xp * inv_dx - (stagger + 0.5)).cast(ti.i32)
+    fx = xp * inv_dx - (base.cast(ti.f32) + stagger)
+
+    w = [0.5*(1.5-fx)**2, 0.75-(fx-1)**2, 0.5*(fx-0.5)**2] # Bspline
 
     v_pic = 0.0
     v_flip = 0.0
 
-    for i in ti.static(range(-1, 3)):
-        for j in ti.static(range(-1, 3)):
-            I = vec2(i, j)
-            pos = base + I + stagger
-            fx = xp * inv_dx - pos
-            weight = Bspline(fx[0]) * Bspline(fx[1])
-            v_pic += weight * grid_v[base + I]
-            v_flip += weight * (grid_v[base + I] - grid_vlast[base + I])
+    for i in ti.static(range(3)):
+        for j in ti.static(range(3)):
+            offset = vec2(i, j)
+            weight = w[i][0] * w[j][1]
+            v_pic += weight * grid_v[base + offset]
+            v_flip += weight * (grid_v[base + offset] - grid_vlast[base + offset])
 
     return v_pic, v_flip
 
@@ -486,19 +454,22 @@ def gather_vp(grid_v, grid_vlast, xp, stagger):
 @ti.func
 def gather_cp(grid_v, xp, stagger):
     inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
-    base, _ = pos_to_stagger_idx(xp, stagger)
+    base = (xp * inv_dx - (stagger + 0.5)).cast(ti.i32)
+    fx = xp * inv_dx - (base.cast(ti.f32) + stagger)
+
+    w = [0.5*(1.5-fx)**2, 0.75-(fx-1)**2, 0.5*(fx-0.5)**2] # Bspline
+    w_grad = [fx-1.5, -2*(fx-1), fx-3.5] # Bspline gradient
 
     cp = vec2(0.0, 0.0)
 
-    for i in ti.static(range(-1, 3)):
-        for j in ti.static(range(-1, 3)):
-            I = vec2(i, j)
-            pos = base + I + stagger
-            fx = xp * inv_dx - pos
-            gradweight = vec2(
-                Bspline_grad(fx[0]) * Bspline(fx[1]),
-                Bspline(fx[0]) * Bspline_grad(fx[1]))
-            cp += gradweight * grid_v[base + I]
+    for i in ti.static(range(3)):
+        for j in ti.static(range(3)):
+            offset = vec2(i, j)
+            # dpos = offset.cast(ti.f32) - fx
+            # weight = w[i][0] * w[j][1]
+            # cp += 4 * weight * dpos * grid_v[base + offset] * inv_dx[0]
+            weight_grad = vec2(w_grad[i][0]*w[j][1], w[i][0]*w_grad[j][1])
+            cp += weight_grad * grid_v[base + offset]
 
     return cp
 
@@ -530,31 +501,34 @@ def G2P():
 @ti.func
 def scatter_vp(grid_v, grid_m, xp, vp, stagger):
     inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
-    base, _ = pos_to_stagger_idx(xp, stagger)
+    base = (xp * inv_dx - (stagger + 0.5)).cast(ti.i32)
+    fx = xp * inv_dx - (base.cast(ti.f32) + stagger)
 
-    for i in ti.static(range(-1, 3)):
-        for j in ti.static(range(-1, 3)):
-            I = vec2(i, j)
-            pos = base + I + stagger
-            fx = xp * inv_dx - pos
-            weight = Bspline(fx[0]) * Bspline(fx[1])
-            grid_v[base + I] += weight * vp
-            grid_m[base + I] += weight
+    w = [0.5*(1.5-fx)**2, 0.75-(fx-1)**2, 0.5*(fx-0.5)**2] # Bspline
+
+    for i in ti.static(range(3)):
+        for j in ti.static(range(3)):
+            offset = vec2(i, j)
+            weight = w[i][0] * w[j][1]
+            grid_v[base + offset] += weight * vp
+            grid_m[base + offset] += weight
 
 
 @ti.func
 def scatter_vp_apic(grid_v, grid_m, xp, vp, cp, stagger):
     inv_dx = vec2(1.0 / grid_x, 1.0 / grid_y).cast(ti.f32)
-    base, _ = pos_to_stagger_idx(xp, stagger)
+    base = (xp * inv_dx - (stagger + 0.5)).cast(ti.i32)
+    fx = xp * inv_dx - (base.cast(ti.f32) + stagger)
 
-    for i in ti.static(range(-1, 3)):
-        for j in ti.static(range(-1, 3)):
-            I = vec2(i, j)
-            pos = base + I + stagger
-            fx = xp * inv_dx - pos
-            weight = Bspline(fx[0]) * Bspline(fx[1])
-            grid_v[base + I] += weight * (vp + cp.dot(fx))
-            grid_m[base + I] += weight
+    w = [0.5*(1.5-fx)**2, 0.75-(fx-1)**2, 0.5*(fx-0.5)**2] # Bspline
+
+    for i in ti.static(range(3)):
+        for j in ti.static(range(3)):
+            offset = vec2(i, j)
+            dpos = (offset.cast(ti.f32) - fx) * vec2(grid_x, grid_y)
+            weight = w[i][0] * w[j][1]
+            grid_v[base + offset] += weight * (vp + cp.dot(dpos))
+            grid_m[base + offset] += weight
 
 
 @ti.kernel
@@ -614,7 +588,7 @@ def onestep(dt):
 
         P2G()
         grid_norm()
-        enforce_boundary()
+        # enforce_boundary()
 
         u_last.copy_from(u)
         v_last.copy_from(v)
@@ -646,8 +620,6 @@ def simulation(max_time, max_step):
                   format(step, i, t, dt, max_vel))
 
             t += dt
-            # update dt with CFL
-            # dt = 5 * grid_x / max_vel
 
         step += 1
 
