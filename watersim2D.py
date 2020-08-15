@@ -170,6 +170,22 @@ def init():
                 else:
                     cell_type[i, j] = utils.AIR
 
+    @ti.kernel
+    def init_spherefall(xc: ti.f32, yc: ti.f32, r: ti.f32):
+        for i, j in cell_type:
+            if i == 0 or i == m - 1 or j == 0 or j == n - 1:
+                cell_type[i, j] = utils.SOLID  # boundary
+            else:
+                x = (i + 0.5) * grid_x
+                y = (j + 0.5) * grid_y
+
+                phi = (x - xc)**2 + (y - yc) ** 2 - r**2
+
+                if phi <= 0 :
+                    cell_type[i, j] = utils.FLUID
+                else:
+                    cell_type[i, j] = utils.AIR
+
     #init simulation
     @ti.kernel
     def init_field():
@@ -200,7 +216,8 @@ def init():
             cp_x[i, j, ix, jx] = vec2(0.0, 0.0)
             cp_y[i, j, ix, jx] = vec2(0.0, 0.0)
 
-    init_dambreak(4, 5)
+    # init_dambreak(4, 4)
+    init_spherefall(5,3,2)
     init_field()
     init_particles()
 
@@ -627,7 +644,7 @@ def simulation(max_time, max_step):
 def main():
     init()
     t0 = time.time()
-    simulation(40, 120)
+    simulation(40, 240)
     t1 = time.time()
     print("simulation elapsed time = {} seconds".format(t1 - t0))
 
