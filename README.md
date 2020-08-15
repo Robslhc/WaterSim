@@ -11,7 +11,7 @@ WaterSim is a physics engine aims to simulate water developed in taichi.
 + MIC(0) PCG Pressure Solver 
 + Geometric Multigrid Pressure Solver 
 
-## Hybrid Eulerian-Lagrangian Methods (TODO)
+## Hybrid Eulerian-Lagrangian Methods
 + PIC
 + FLIP
 + Affine PIC
